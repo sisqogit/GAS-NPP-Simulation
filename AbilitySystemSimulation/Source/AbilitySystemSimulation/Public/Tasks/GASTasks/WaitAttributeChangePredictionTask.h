@@ -26,7 +26,8 @@ enum  EWaitAttributeChangedComparison : uint8
 	MAX UMETA(Hidden)
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FWaitAttributeChangeDelegate,const float&,OldValue,const float&,CurrentValue);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FWaitAttributeChangeDelegate, FGameplayAttribute, Attribute, const float&, OldValue, const float&, CurrentValue);
+
 
 UCLASS()
 class ABILITYSYSTEMSIMULATION_API UWaitOwnerAttributeChangePredictionTask : public UBasePredictionTask
@@ -36,25 +37,30 @@ class ABILITYSYSTEMSIMULATION_API UWaitOwnerAttributeChangePredictionTask : publ
 
 	UPROPERTY(BlueprintAssignable)
 	FWaitAttributeChangeDelegate	OnChange;
-	
-	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category= Settings)
+
+	//UPROPERTY()
+	//TArray<FGameplayAttribute> AttributesToListenFor;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Settings)
 	TEnumAsByte<EWaitAttributeChangedComparison> ComparisonType = None;
-	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category= Settings)
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Settings)
 	FGameplayTag WithTag;
-	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category= Settings)
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Settings)
 	FGameplayTag WithoutTag;
-	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category= Settings)
-	FGameplayAttribute	Attribute;
-	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category= Settings,meta=(EditCondition = "ComparisonType != EWaitAttributeChangedComparison::None"))
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Settings)
+	TArray<FGameplayAttribute>	Attribute;								// Changed To Array
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Settings, meta = (EditCondition = "ComparisonType != EWaitAttributeChangedComparison::None"))
 	float ComparisonValue = 0.f;
-	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category= Settings)
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Settings)
 	bool bTriggerOnce = true;
-	
+
 	FDelegateHandle OnAttributeChangeDelegateHandle;
 
-	UFUNCTION(BlueprintCallable, Category="AttributeChangedTask",meta=(BlueprintInternalUseOnly = "TRUE"))
+	UFUNCTION(BlueprintCallable, Category = "AttributeChangedTask", meta = (BlueprintInternalUseOnly = "TRUE"))
 	void ExecuteTask();
-	
+
 	UFUNCTION()
 	virtual void OnAttributeChange(const FOnAttributeChangeData& CallbackData);
 
@@ -63,7 +69,7 @@ class ABILITYSYSTEMSIMULATION_API UWaitOwnerAttributeChangePredictionTask : publ
 	virtual void OnPreDeactivate(const bool& bWasCancelled) override;
 
 	virtual void StartTaskRollback(const FAbilityTaskDataContainer& AuthoritySyncData) override;
-	
+
 	virtual FText GetNodeTitle() const override;
 	virtual FLinearColor GetNodeTitleColor() const override;
 };
@@ -75,15 +81,15 @@ class ABILITYSYSTEMSIMULATION_API UWaitTargetAttributeChangePredictionTask : pub
 	
 
 	// new execution/start function
-	UFUNCTION(BlueprintCallable, Category="AttributeChangedTask",meta=(BlueprintInternalUseOnly = "TRUE"))
+	UFUNCTION(BlueprintCallable, Category = "AttributeChangedTask", meta = (BlueprintInternalUseOnly = "TRUE"))
 	void ExecuteTaskWithTarget(AActor* TargetActor = nullptr);
-	
+
 	virtual UAbilitySystemComponent* GetFocusedASC() const override;
 	// Synced Data API
 	virtual void StartTaskRollback(const FAbilityTaskDataContainer& AuthoritySyncData) override;
 	virtual void ReadFromSyncedData(TSharedPtr<const FAbilityTaskDataBase> DataToRead) override;
 	virtual void WriteToSyncedData(TSharedPtr<FAbilityTaskDataBase> DataToWrite) override;
-	
+
 	virtual FText GetNodeTitle() const override;
 	virtual FLinearColor GetNodeTitleColor() const override;
 
