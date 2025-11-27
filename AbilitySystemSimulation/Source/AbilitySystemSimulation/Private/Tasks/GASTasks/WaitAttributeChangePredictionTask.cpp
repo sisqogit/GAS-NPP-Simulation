@@ -17,21 +17,26 @@ UWaitOwnerAttributeChangePredictionTask::UWaitOwnerAttributeChangePredictionTask
 	:Super(ObjectInitializer)
 {
 	DataType = nullptr;
-	StartTaskFunctionName = GET_FUNCTION_NAME_CHECKED(UWaitOwnerAttributeChangePredictionTask,ExecuteTask);
+	StartTaskFunctionName = GET_FUNCTION_NAME_CHECKED(UWaitOwnerAttributeChangePredictionTask, ExecuteTask);
 	ShouldTaskTick = false;
 }
 
 void UWaitOwnerAttributeChangePredictionTask::ExecuteTask()
 {
-	if (IsInRollback())
+	if (IsInRollback()) return;
+
+	UAbilitySystemComponent* ASC = GetFocusedASC();
+	if (!ASC || Attribute.Num() == 0) return;
+
+	//AttributesToListenFor = Attribute; 
+
+	for (const FGameplayAttribute& Attr : Attribute)
 	{
-		return;
+		ASC->GetGameplayAttributeValueChangeDelegate(Attr)
+			.AddUObject(this, &UWaitOwnerAttributeChangePredictionTask::OnAttributeChange);
 	}
-	if (GetFocusedASC())
-	{
-		OnAttributeChangeDelegateHandle = GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).AddUObject(this, &UWaitOwnerAttributeChangePredictionTask::OnAttributeChange);
-		ActivateTask();
-	}
+
+	ActivateTask();
 }
 
 void UWaitOwnerAttributeChangePredictionTask::OnAttributeChange(const FOnAttributeChangeData& CallbackData)
@@ -40,6 +45,19 @@ void UWaitOwnerAttributeChangePredictionTask::OnAttributeChange(const FOnAttribu
 	{
 		return;
 	}
+
+	//if (!Attribute.Contains(CallbackData.Attribute))
+	//{
+	//	return;
+	//}
+
+	// -------------------------
+	if (FMath::IsNearlyEqual(CallbackData.OldValue, CallbackData.NewValue))
+	{
+		return;
+	}
+	// -------------------------
+
 	const float NewValue = CallbackData.NewValue;
 	const float OldValue = CallbackData.OldValue;
 	const FGameplayEffectModCallbackData* Data = CallbackData.GEModData;
@@ -61,14 +79,14 @@ void UWaitOwnerAttributeChangePredictionTask::OnAttributeChange(const FOnAttribu
 			// Failed tag check
 			return;
 		}
-	}	
+	}
 
 	bool PassedComparison = true;
 	switch (ComparisonType)
 	{
 	case ExactlyEqualTo:
 		PassedComparison = (NewValue == ComparisonValue);
-		break;		
+		break;
 	case GreaterThan:
 		PassedComparison = (NewValue > ComparisonValue);
 		break;
@@ -89,12 +107,20 @@ void UWaitOwnerAttributeChangePredictionTask::OnAttributeChange(const FOnAttribu
 	}
 	if (PassedComparison)
 	{
-		OnChange.Broadcast(OldValue,NewValue);
+		OnChange.Broadcast(CallbackData.Attribute, OldValue, NewValue); // Added CallbackData.Attribute
 		if (bTriggerOnce)
 		{
-			DeactivateTask(false);
-			GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(OnAttributeChangeDelegateHandle);
-			OnAttributeChangeDelegateHandle.Reset();
+			DeactivateTask(false);  // or EndTask()
+
+			// Optional safety cleanup 
+			if (UAbilitySystemComponent* ASC = GetFocusedASC())
+			{
+				for (const FGameplayAttribute& Attr : Attribute)
+				{
+					ASC->GetGameplayAttributeValueChangeDelegate(Attr)
+						.RemoveAll(this);   
+				}
+			}
 		}
 	}
 }
@@ -107,36 +133,44 @@ UAbilitySystemComponent* UWaitOwnerAttributeChangePredictionTask::GetFocusedASC(
 void UWaitOwnerAttributeChangePredictionTask::OnPreDeactivate(const bool& bWasCancelled)
 {
 	Super::OnPreDeactivate(bWasCancelled);
-	if (OnAttributeChangeDelegateHandle.IsValid())
+
+	if (UAbilitySystemComponent* ASC = GetFocusedASC())
 	{
-		GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(OnAttributeChangeDelegateHandle);
-		OnAttributeChangeDelegateHandle.Reset();
+		for (const FGameplayAttribute Attr : Attribute)
+		{
+			ASC->GetGameplayAttributeValueChangeDelegate(Attr).RemoveAll(this);
+		}
 	}
 }
 
 void UWaitOwnerAttributeChangePredictionTask::StartTaskRollback(const FAbilityTaskDataContainer& AuthoritySyncData)
 {
 	Super::StartTaskRollback(AuthoritySyncData);
-	
-	// we should be active
+
+	const FExternalTargetTaskData* AttributeChangedAuthorityData = static_cast<FExternalTargetTaskData*>(AuthoritySyncData.TaskDataPointer.Get());
+	UAbilitySystemComponent* TargetAsc = AttributeChangedAuthorityData && AttributeChangedAuthorityData->ExternalTarget
+		? UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(AttributeChangedAuthorityData->ExternalTarget)
+		: GetAbilitySystemComponent();
+
+	if (!TargetAsc || Attribute.Num() == 0)
+		return;
+
 	if (AuthoritySyncData.IsActive)
 	{
-		const FExternalTargetTaskData* AttributeChangedAuthorityData = static_cast<FExternalTargetTaskData*>(AuthoritySyncData.TaskDataPointer.Get());
-		UAbilitySystemComponent* TargetAsc = AttributeChangedAuthorityData->ExternalTarget == nullptr ? GetAbilitySystemComponent() : UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(AttributeChangedAuthorityData->ExternalTarget);
-		// we are Not bound
-		if (!OnAttributeChangeDelegateHandle.IsValid())
+		// Bind all attributes in the array instead of just one
+		for (const FGameplayAttribute& Attr : Attribute)
 		{
-			OnAttributeChangeDelegateHandle = GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).AddUObject(this, &UWaitOwnerAttributeChangePredictionTask::OnAttributeChange);
+			TargetAsc->GetGameplayAttributeValueChangeDelegate(Attr)
+				.AddUObject(this, &UWaitOwnerAttributeChangePredictionTask::OnAttributeChange);
 		}
-		
 	}
-	else // we shouldn't be active
+	else
 	{
-		// we are bound , so unbind and reset.
-		if (OnAttributeChangeDelegateHandle.IsValid())
+		// Unbind all attributes in the array
+		for (const FGameplayAttribute& Attr : Attribute)
 		{
-			GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(OnAttributeChangeDelegateHandle);
-			OnAttributeChangeDelegateHandle.Reset();
+			TargetAsc->GetGameplayAttributeValueChangeDelegate(Attr)
+				.RemoveAll(this);
 		}
 	}
 }
@@ -157,7 +191,7 @@ UWaitTargetAttributeChangePredictionTask::UWaitTargetAttributeChangePredictionTa
 	:Super(ObjectInitializer)
 {
 	DataType = FExternalTargetTaskData::StaticStruct();
-	StartTaskFunctionName = GET_FUNCTION_NAME_CHECKED(UWaitTargetAttributeChangePredictionTask,ExecuteTaskWithTarget);
+	StartTaskFunctionName = GET_FUNCTION_NAME_CHECKED(UWaitTargetAttributeChangePredictionTask, ExecuteTaskWithTarget);
 	ShouldTaskTick = false;
 }
 
@@ -167,15 +201,21 @@ void UWaitTargetAttributeChangePredictionTask::ExecuteTaskWithTarget(AActor* Tar
 	{
 		return;
 	}
-	CachedExternalTarget = nullptr;
-	if (TargetActor)
-	{
-		CachedExternalTarget = TargetActor;
-	}
 
-	if (UAbilitySystemComponent* TargetAsc = CachedExternalTarget == nullptr ?  GetAbilitySystemComponent() : UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(CachedExternalTarget))
+	CachedExternalTarget = TargetActor;
+
+	UAbilitySystemComponent* TargetAsc = CachedExternalTarget
+		? UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(CachedExternalTarget)
+		: GetAbilitySystemComponent();
+
+	if (TargetAsc && Attribute.Num() > 0)
 	{
-		OnAttributeChangeDelegateHandle = TargetAsc->GetGameplayAttributeValueChangeDelegate(Attribute).AddUObject(this, &UWaitTargetAttributeChangePredictionTask::OnAttributeChange);
+		for (const FGameplayAttribute& Attr : Attribute)
+		{
+			TargetAsc->GetGameplayAttributeValueChangeDelegate(Attr)
+				.AddUObject(this, &UWaitTargetAttributeChangePredictionTask::OnAttributeChange);
+		}
+
 		ActivateTask();
 	}
 }
@@ -192,34 +232,41 @@ UAbilitySystemComponent* UWaitTargetAttributeChangePredictionTask::GetFocusedASC
 void UWaitTargetAttributeChangePredictionTask::StartTaskRollback(const FAbilityTaskDataContainer& AuthoritySyncData)
 {
 	// this override the super to ensure we have the same target and bind to its ASC.
-	
-	// we should be active
 	if (AuthoritySyncData.IsActive)
 	{
 		const FExternalTargetTaskData* AttributeChangedAuthorityData = static_cast<FExternalTargetTaskData*>(AuthoritySyncData.TaskDataPointer.Get());
-		UAbilitySystemComponent* TargetAsc = AttributeChangedAuthorityData->ExternalTarget == nullptr ? GetAbilitySystemComponent() : UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(AttributeChangedAuthorityData->ExternalTarget);
-		// we are already bound
-		if (OnAttributeChangeDelegateHandle.IsValid())
+		UAbilitySystemComponent* TargetAsc = AttributeChangedAuthorityData && AttributeChangedAuthorityData->ExternalTarget
+			? UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(AttributeChangedAuthorityData->ExternalTarget)
+			: GetAbilitySystemComponent();
+
+		if (!TargetAsc || Attribute.Num() == 0)
+			return;
+
+		// Always unbind from current ASC first (safety)
+		if (UAbilitySystemComponent* CurrentASC = GetFocusedASC())
 		{
-			// if we are bound to wrong target, unbind and rebind to correct target, otherwise we are already bound as we should
-			if (GetFocusedASC() != TargetAsc)
+			for (const FGameplayAttribute& Attr : Attribute)
 			{
-				GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(OnAttributeChangeDelegateHandle);
-				OnAttributeChangeDelegateHandle = TargetAsc->GetGameplayAttributeValueChangeDelegate(Attribute).AddUObject(this, &UWaitTargetAttributeChangePredictionTask::OnAttributeChange);
+				CurrentASC->GetGameplayAttributeValueChangeDelegate(Attr).RemoveAll(this);
 			}
 		}
-		else // we are not bound , but should be, directly bind to correct target
+
+		// Then bind to correct target ASC
+		for (const FGameplayAttribute& Attr : Attribute)
 		{
-			OnAttributeChangeDelegateHandle = TargetAsc->GetGameplayAttributeValueChangeDelegate(Attribute).AddUObject(this, &UWaitTargetAttributeChangePredictionTask::OnAttributeChange);
+			TargetAsc->GetGameplayAttributeValueChangeDelegate(Attr)
+				.AddUObject(this, &UWaitTargetAttributeChangePredictionTask::OnAttributeChange);
 		}
 	}
 	else // we shouldn't be active
 	{
-		// we are bound , so unbind and reset.
-		if (OnAttributeChangeDelegateHandle.IsValid())
+		// Unbind from whatever we're currently listening to
+		if (UAbilitySystemComponent* CurrentASC = GetFocusedASC())
 		{
-			GetFocusedASC()->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(OnAttributeChangeDelegateHandle);
-			OnAttributeChangeDelegateHandle.Reset();
+			for (const FGameplayAttribute& Attr : Attribute)
+			{
+				CurrentASC->GetGameplayAttributeValueChangeDelegate(Attr).RemoveAll(this);
+			}
 		}
 	}
 }
@@ -231,9 +278,9 @@ void UWaitTargetAttributeChangePredictionTask::ReadFromSyncedData(TSharedPtr<con
 
 void UWaitTargetAttributeChangePredictionTask::WriteToSyncedData(TSharedPtr<FAbilityTaskDataBase> DataToWrite)
 {
-	FExternalTargetTaskData* ExternalTargetData = static_cast< FExternalTargetTaskData*>(DataToWrite.Get());
+	FExternalTargetTaskData* ExternalTargetData = static_cast<FExternalTargetTaskData*>(DataToWrite.Get());
 	ExternalTargetData->ExternalTarget = CachedExternalTarget;
-	
+
 }
 
 FText UWaitTargetAttributeChangePredictionTask::GetNodeTitle() const
